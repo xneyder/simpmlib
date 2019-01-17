@@ -17,6 +17,8 @@ import cx_Oracle
 import base64
 import signal
 import subprocess
+import time
+import glob
 from LoggerInit import LoggerInit
 
 class ManagedDbConnection:
@@ -71,8 +73,7 @@ def run_sqlplus(sqlplus_script):
     stdout_lines = stdout.split("\n")
     return stdout_lines
 
-
-def kill_process(program,process_name):
+def check_running(program,process_name):
     pids=[pid for pid in os.listdir('/proc') if pid.isdigit()]
     for pid in pids:
         if int(pid) == int(os.getpid()):
@@ -80,15 +81,31 @@ def kill_process(program,process_name):
         try:
             cmd=open(os.path.join('/proc',pid,'cmdline')).read()
             if process_name in cmd and program in cmd:
-                os.kill(int(pid), signal.SIGKILL)
                 return(int(pid))
         except IOError:
             continue
+    return None
+
+def kill_process(program,process_name):
+    app_logger=logger.get_logger('kill_process')
+    pid=check_running(program,process_name)
+    if not pid:
+        app_logger.error('{process_name} is not running'\
+            .format(process_name=process_name))
+        quit()
+    os.kill(int(pid), signal.SIGKILL)
+    time.sleep(10)
+    pid=check_running(program,process_name)
+    if not pid:
+        app_logger.error('{process_name} is not running'\
+            .format(process_name=process_name))
+        quit()
         
 
 
 def parse_args():
     """Parse input arguments"""
+    app_logger=logger.get_logger("create_access")
     global LOCAL_DIR
     global LIBRARY_NAME
     global MASK
@@ -103,54 +120,19 @@ def parse_args():
     	required=True,
     	type=str)
 
-    parser.add_argument('-t','--dbl_time',
-    	help='Dbl batchevery timeout in seconds',
-    	type=str)
-
     parser.add_argument('-m','--mask',
     	help='File mask for the GD access',
     	type=str)
 
     args=parser.parse_args()
-    LOCAL_DIR=args.input_dir
     LIBRARY_NAME=args.lib
+    LOCAL_DIR=args.input_dir
     if args.mask:
         MASK=args.mask
     
 
 def create_access():
     app_logger=logger.get_logger("create_access")
-    """with ManagedDbConnection(DB_USER,DB_PASSWORD,ORACLE_SID,DB_HOST) as db:
-        cursor=db.cursor()
-        try:
-            app_logger.info('Creating {LIBRARY_NAME} GD access'\
-                .format(LIBRARY_NAME=LIBRARY_NAME))
-            cursor.callproc("comm_db.PA_PROJ_MED.SP_INSERT_ACC_L2G", 
-                keywordParameters = dict(
-                IN_SUBNET_NAME=LIBRARY_NAME, 
-                IN_ACCESS_NAME=LIBRARY_NAME, 
-                IN_GD_NAME=GD_NAME, 
-                IN_LOCAL_DIR=LOCAL_DIR+"/in_sim/", 
-                IN_CYCLE_INTERVAL=CYCLE_INTERVAL, 
-                IN_MASK=MASK, 
-                IN_ADVAMCED_MASK="", 
-                IN_AGING_FILTER="", 
-                IN_SORT_ORDER="", 
-                IN_SOURCE_FILE_FINISH_POLICY=LOCAL_DIR+"/done_sim/", 
-                IN_SOURCE_SUFFIX_PREFIX="", 
-                IN_LOOK_IN_SUBFOLDERS="", 
-                IN_SUB_FOLDERS_MASK="", 
-                IN_POST_SCRIPT="", 
-                IN_SHOULD_RETRANSFER="", 
-                IN_RETRANFER_OFFSET="", 
-                IN_ENABLEFILEMONITOR=ENABLEFILEMONITOR, 
-                IN_NE_NAME=NE_NAME)
-            )
-        except cx_Oracle.DatabaseError as e:
-            app_logger.error(e)
-            app_logger.error("exec comm_db.PA_PROJ_MED.SP_INSERT_ACC_L2G")
-            quit()"""
-    
     app_logger.info('Creating {LIBRARY_NAME} GD access'\
         .format(LIBRARY_NAME=LIBRARY_NAME))
     sqlplus_script="""
@@ -222,20 +204,47 @@ def create_access():
             quit()
     app_logger.info('Refreshing {GD_NAME} process'\
         .format(GD_NAME=GD_NAME)) 
-    pid=kill_process('GD_Name',GD_NAME)
-    if not pid:
-        app_logger.error('GD {GD_NAME} is not running'.format(GD_NAME=GD_NAME))
-        quit()
+    kill_process('GD_Name',GD_NAME)
     return access_id
 
 def main():
     app_logger=logger.get_logger("main")
+    global DVX2_IMP_DIR
+    global DVX2_LOG_DIR
     parse_args()
+
+    #Validate environment variables
+    if 'DVX2_IMP_DIR' not in os.environ:
+        app_logger.error('DVX2_IMP_DIR env variable not defined') 
+        quit()
+    DVX2_IMP_DIR=os.environ['DVX2_IMP_DIR']
+    if 'DVX2_LOG_DIR' not in os.environ:
+        app_logger.error('DVX2_LOG_DIR env variable not defined') 
+        quit()
+    DVX2_LOG_DIR=os.environ['DVX2_LOG_DIR']
+    #Validate if Library exists
+    if not os.path.isfile(os.path.join(DVX2_IMP_DIR,\
+            'scripts',LIBRARY_NAME+'.connect')): 
+        app_logger.error('Library {LIBRARY_NAME} does not exist'\
+            .format(LIBRARY_NAME=LIBRARY_NAME)) 
+        quit()
+    #Validate raw data files
+    if not os.path.isdir(LOCAL_DIR):
+        app_logger.error('Input dir {LOCAL_DIR} does not exist'\
+            .format(LOCAL_DIR=LOCAL_DIR)) 
+        quit()
+    if len(glob.glob(os.path.join(LOCAL_DIR,MASK))) ==0:
+        app_logger.error('No raw data files available in {LOCAL_DIR}'\
+            .format(LOCAL_DIR=LOCAL_DIR)) 
+        quit()
+
+    #Create GD Access
     access_id=create_access()
     if not access_id:
         app_logger.error('Access could not be created')
         quit()
 
+    
 
 
 if __name__ == "__main__":
@@ -259,5 +268,8 @@ if __name__ == "__main__":
     SOURCE_FILE_FINISH_POLICY='Move'
     ENABLEFILEMONITOR="0"
     NE_NAME='Mediation_Server'
+    DVX2_IMP_DIR=''
+    DVX2_LOG_DIR=''
+    INSTANCE_ID="1717"
     logger=LoggerInit(log_file,10)
     main()
