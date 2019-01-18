@@ -212,28 +212,19 @@ def run_connect():
     """
     Run a library connect script
     """
+    app_logger=logger.get_logger("main")
+    tmp_file=os.path.join(TMP_DIR,'{LIBRARY_NAME}.connect.log'\
+        .format(LIBRARY_NAME=LIBRARY_NAME))
     args=['connect',
             '-daemon',
             '{LIBRARY_NAME}.connect'.format(LIBRARY_NAME=LIBRARY_NAME),
             '-expr',
             '\'(load "n2_std.connect") (load "n2_logger.connect") (add-log-module "connect" (get-env-else "N2_LOG_DIR" ".") "conductor_AFFIRMED_VMCC_FPP_1717") (export "conductor_AFFIRMED_VMCC_FPP_1717" self) (define conductor-instance-id 1717)(define library-instance-name "AFFIRMED_VMCC_FPP")(define dvx2-log-location (get-env "DVX2_LOG_DIR") ) (define dvx2-log-prefix "dvx2_") (define GDSubscription "Notification -Protocol File-Transfer -NeTypeName Mediation_Server -AType 10 -Subnet 42756 -NeNum 3150611 -Access 42284") (define DeactivateAP 0)(define NI_DIR "/teoco/sa_root_med01/implementation/DVX2/data/NI")\''
-            ' > /tmp/log'
+            ' > {tmp_file} 2>&1'.format(tmp_file=tmp_file)
             ]
+    app_logger.info('Running {LIBRARY_NAME}.connect'\
+        .format(LIBRARY_NAME=LIBRARY_NAME))
     os.system(' '.join(args))
-    #p = subprocess.Popen(args,
-    #    stdin=subprocess.PIPE,
-    #    stdout=subprocess.PIPE,
-    #    stderr=subprocess.PIPE,
-    #    #shell=True,
-    #    )
-    #while True:
-    #    print p.stdout.readline()
-
-    #(stdout,stderr) = p.communicate()
-    # stdout_lines = stdout.decode('utf-8').split("\n")
-    #connect_log = stdout.split("\n")
-    #print(stderr)
-    #print(connect_log)
 
 
 
@@ -278,15 +269,19 @@ def main():
     worker = Thread(target=run_connect, args=())
     worker.setDaemon(True)
     worker.start()
-    time.sleep(1000000)
+    while True:
+        print('Main')
+        time.sleep(5)
 
     
 
 
 if __name__ == "__main__":
-    print os.path.dirname(__file__)
-    quit()
+    print os.getcwd()
     #constants
+    TMP_DIR=os.path.join(os.getcwd(),'tmp')
+    if not os.path.exists(TMP_DIR):
+        os.makedirs(TMP_DIR)
     DB_USER=os.environ['DB_USER']
     DB_PASSWORD=base64.b64decode(os.environ['DB_PASSWORD'])
     ORACLE_SID=os.environ['ORACLE_SID']
