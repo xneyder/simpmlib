@@ -20,6 +20,7 @@ import subprocess
 import time
 import glob
 from LoggerInit import LoggerInit
+from threading import Thread
 
 class ManagedDbConnection:
     def __init__(self, DB_USER,DB_PASSWORD,ORACLE_SID,DB_HOST):
@@ -204,8 +205,37 @@ def create_access():
             quit()
     app_logger.info('Refreshing {GD_NAME} process'\
         .format(GD_NAME=GD_NAME)) 
-    kill_process('GD_Name',GD_NAME)
+    #kill_process('GD_Name',GD_NAME)
     return access_id
+
+def run_connect():
+    """
+    Run a library connect script
+    """
+    args=['connect',
+            '-daemon',
+            '{LIBRARY_NAME}.connect'.format(LIBRARY_NAME=LIBRARY_NAME),
+            '-expr',
+            '\'(load "n2_std.connect") (load "n2_logger.connect") (add-log-module "connect" (get-env-else "N2_LOG_DIR" ".") "conductor_AFFIRMED_VMCC_FPP_1717") (export "conductor_AFFIRMED_VMCC_FPP_1717" self) (define conductor-instance-id 1717)(define library-instance-name "AFFIRMED_VMCC_FPP")(define dvx2-log-location (get-env "DVX2_LOG_DIR") ) (define dvx2-log-prefix "dvx2_") (define GDSubscription "Notification -Protocol File-Transfer -NeTypeName Mediation_Server -AType 10 -Subnet 42756 -NeNum 3150611 -Access 42284") (define DeactivateAP 0)(define NI_DIR "/teoco/sa_root_med01/implementation/DVX2/data/NI")\''
+            ' > /tmp/log'
+            ]
+    os.system(' '.join(args))
+    #p = subprocess.Popen(args,
+    #    stdin=subprocess.PIPE,
+    #    stdout=subprocess.PIPE,
+    #    stderr=subprocess.PIPE,
+    #    #shell=True,
+    #    )
+    #while True:
+    #    print p.stdout.readline()
+
+    #(stdout,stderr) = p.communicate()
+    # stdout_lines = stdout.decode('utf-8').split("\n")
+    #connect_log = stdout.split("\n")
+    #print(stderr)
+    #print(connect_log)
+
+
 
 def main():
     app_logger=logger.get_logger("main")
@@ -244,10 +274,18 @@ def main():
         app_logger.error('Access could not be created')
         quit()
 
+    #Run connect
+    worker = Thread(target=run_connect, args=())
+    worker.setDaemon(True)
+    worker.start()
+    time.sleep(1000000)
+
     
 
 
 if __name__ == "__main__":
+    print os.path.dirname(__file__)
+    quit()
     #constants
     DB_USER=os.environ['DB_USER']
     DB_PASSWORD=base64.b64decode(os.environ['DB_PASSWORD'])
@@ -271,5 +309,6 @@ if __name__ == "__main__":
     DVX2_IMP_DIR=''
     DVX2_LOG_DIR=''
     INSTANCE_ID="1717"
+    connect_log=""
     logger=LoggerInit(log_file,10)
     main()
