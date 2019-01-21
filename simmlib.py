@@ -212,7 +212,7 @@ def run_connect():
     """
     Run a library connect script
     """
-    app_logger=logger.get_logger("main")
+    app_logger=logger.get_logger("run_connect")
     tmp_file=os.path.join(TMP_DIR,'{LIBRARY_NAME}.connect.log'\
         .format(LIBRARY_NAME=LIBRARY_NAME))
     args=['connect',
@@ -226,12 +226,61 @@ def run_connect():
         .format(LIBRARY_NAME=LIBRARY_NAME))
     os.system(' '.join(args))
 
+def delete_data():
+    """
+    Delet data in target tables for datetime found in raw data files
+    """
+    app_logger=logger.get_logger("delete_data")
+
+def parse_dbl():
+    """
+    Get table list and batchevery time from dbl fiile
+    """
+    app_logger=logger.get_logger("parse_dbl")
+    global table_list
+    global batchevery
+    global connect_file
+    global work_dir_list
+    global error_dir_list
+    app_logger.info('Parsing {connect_file}'.format(connect_file=connect_file))
+    dbl_file=""
+    with open(connect_file) as file:
+        filedata=file.read().split('\n')
+        for line in filedata:
+            if ".dbl" in line:
+                dbl_file=line.split('"')[1]
+                break
+    dbl_file=os.path.join(DVX2_IMP_DIR,'config','Dbl',dbl_file)
+    app_logger.info('Parsing {dbl_file}'.format(dbl_file=dbl_file))
+    with open(dbl_file) as file:
+        filedata=file.read().split('\n')
+        for line in filedata:
+            if "DBProfile" in line:
+                profile=line.split("=")[1]
+            elif "TargetTable" in line:
+                table_list.add(profile+'.'+line.split("=")[1]) 
+            elif "BatchEvery" in line:
+                batchevery=max(batchevery,line.split("=")[1])
+            elif "WorkDir" in line:
+                work_dir_list.add(line.split("=")[1]) 
+            elif "ErrorDir" in line:
+                error_dir_list.add(line.split("=")[1]) 
+                
+    
+
+def get_datetime():
+    """
+    Get table list and batchevery time from dbl fiile
+    """
+    global datetime_list
+    app_logger=logger.get_logger("get_datetime")
 
 
 def main():
     app_logger=logger.get_logger("main")
     global DVX2_IMP_DIR
     global DVX2_LOG_DIR
+    global connect_file
     parse_args()
 
     #Validate environment variables
@@ -244,8 +293,8 @@ def main():
         quit()
     DVX2_LOG_DIR=os.environ['DVX2_LOG_DIR']
     #Validate if Library exists
-    if not os.path.isfile(os.path.join(DVX2_IMP_DIR,\
-            'scripts',LIBRARY_NAME+'.connect')): 
+    connect_file=os.path.join(DVX2_IMP_DIR,'scripts',LIBRARY_NAME+'.connect')
+    if not connect_file:
         app_logger.error('Library {LIBRARY_NAME} does not exist'\
             .format(LIBRARY_NAME=LIBRARY_NAME)) 
         quit()
@@ -265,6 +314,17 @@ def main():
         app_logger.error('Access could not be created')
         quit()
 
+    #Parse DBL file
+    parse_dbl()
+    quit()
+
+    #Parse DBL file
+    parse_dbl()
+
+    #Get datetime list
+    get_datetime()
+
+    quit()
     #Run connect
     worker = Thread(target=run_connect, args=())
     worker.setDaemon(True)
@@ -274,6 +334,8 @@ def main():
         time.sleep(5)
 
     
+    #Delete data from tables tables
+    delete_data()
 
 
 if __name__ == "__main__":
@@ -305,5 +367,11 @@ if __name__ == "__main__":
     DVX2_LOG_DIR=''
     INSTANCE_ID="1717"
     connect_log=""
+    connect_file=""
+    table_list=set()
+    work_dir_list=set()
+    error_dir_list=set()
+    datetime_list=set()
+    batchevery=30
     logger=LoggerInit(log_file,10)
     main()
