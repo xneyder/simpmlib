@@ -12,6 +12,7 @@
 """
 import sys
 import os
+import shutil
 import argparse
 import cx_Oracle
 import base64
@@ -76,31 +77,28 @@ def run_sqlplus(sqlplus_script):
 
 def check_running(program,process_name):
     pids=[pid for pid in os.listdir('/proc') if pid.isdigit()]
+    pids_found=[]
     for pid in pids:
         if int(pid) == int(os.getpid()):
             continue
         try:
             cmd=open(os.path.join('/proc',pid,'cmdline')).read()
             if process_name in cmd and program in cmd:
-                return(int(pid))
+                pids_found.append(int(pid))
         except IOError:
             continue
-    return None
+    return pids_found
 
 def kill_process(program,process_name):
     app_logger=logger.get_logger('kill_process')
-    pid=check_running(program,process_name)
-    if not pid:
+    pids=check_running(program,process_name)
+    if not pids:
         app_logger.error('{process_name} is not running'\
             .format(process_name=process_name))
-        quit()
-    os.kill(int(pid), signal.SIGKILL)
-    time.sleep(10)
-    pid=check_running(program,process_name)
-    if not pid:
-        app_logger.error('{process_name} is not running'\
-            .format(process_name=process_name))
-        quit()
+        return -1                
+    for pid in pids:
+        os.kill(int(pid), signal.SIGKILL)
+    return 0
         
 
 
@@ -173,19 +171,22 @@ def create_access():
         IN_MASK=MASK,
         IN_ADVAMCED_MASK="",
         IN_AGING_FILTER="",
-        IN_SORT_ORDER="",
-        IN_SOURCE_FILE_FINISH_POLICY=LOCAL_DIR+"/done_sim/",
+        IN_SORT_ORDER="NoSort",
+        IN_SOURCE_FILE_FINISH_POLICY="Delete",
         IN_SOURCE_SUFFIX_PREFIX="",
         IN_LOOK_IN_SUBFOLDERS="",
         IN_SUB_FOLDERS_MASK="",
         IN_POST_SCRIPT="",
-        IN_SHOULD_RETRANSFER="",
-        IN_RETRANFER_OFFSET="",
+        IN_SHOULD_RETRANSFER="Always",
+        IN_RETRANFER_OFFSET="AllFile",
         IN_ENABLEFILEMONITOR=ENABLEFILEMONITOR,
         IN_NE_NAME=NE_NAME
     )
     sqlplus_output = run_sqlplus(sqlplus_script)
     app_logger.info(' '.join(sqlplus_output))
+    #Create input and done folders
+    if not os.path.exists(LOCAL_DIR+"/in_sim/"):
+        os.makedirs(LOCAL_DIR+"/in_sim/")
 
     with ManagedDbConnection(DB_USER,DB_PASSWORD,ORACLE_SID,DB_HOST) as db:
         cursor=db.cursor()
@@ -205,7 +206,17 @@ def create_access():
             quit()
     app_logger.info('Refreshing {GD_NAME} process'\
         .format(GD_NAME=GD_NAME)) 
-    #kill_process('GD_Name',GD_NAME)
+    pid=kill_process('GD_Name',GD_NAME)
+    if pid !=0:
+        app_logger.error('{process_name} is not running'\
+            .format(process_name=process_name))
+        quit()
+    time.sleep(20)
+    pid=check_running('GD_Name',GD_NAME)
+    if not pid:
+        app_logger.error('{process_name} is not running'\
+            .format(process_name=process_name))
+        quit()
     return access_id
 
 def run_connect():
@@ -213,14 +224,32 @@ def run_connect():
     Run a library connect script
     """
     app_logger=logger.get_logger("run_connect")
-    tmp_file=os.path.join(TMP_DIR,'{LIBRARY_NAME}.connect.log'\
+    global connect_log
+    global INSTANCE_ID
+    global access_id
+    #(define GDSubscription "Notification -Protocol File-Transfer -NeTypeName Mediation_Server -AType 10 -Subnet 42756 -NeNum 3150611 -Access 42284")\
+    connect_log=os.path.join(TMP_DIR,'{LIBRARY_NAME}.connect.log'\
         .format(LIBRARY_NAME=LIBRARY_NAME))
     args=['connect',
             '-daemon',
             '{LIBRARY_NAME}.connect'.format(LIBRARY_NAME=LIBRARY_NAME),
             '-expr',
-            '\'(load "n2_std.connect") (load "n2_logger.connect") (add-log-module "connect" (get-env-else "N2_LOG_DIR" ".") "conductor_AFFIRMED_VMCC_FPP_1717") (export "conductor_AFFIRMED_VMCC_FPP_1717" self) (define conductor-instance-id 1717)(define library-instance-name "AFFIRMED_VMCC_FPP")(define dvx2-log-location (get-env "DVX2_LOG_DIR") ) (define dvx2-log-prefix "dvx2_") (define GDSubscription "Notification -Protocol File-Transfer -NeTypeName Mediation_Server -AType 10 -Subnet 42756 -NeNum 3150611 -Access 42284") (define DeactivateAP 0)(define NI_DIR "/teoco/sa_root_med01/implementation/DVX2/data/NI")\''
-            ' > {tmp_file} 2>&1'.format(tmp_file=tmp_file)
+            '\'(load "n2_std.connect")\
+            (load "n2_logger.connect")\
+            (add-log-module "connect" (get-env-else "N2_LOG_DIR" ".")\
+                "conductor_AFFIRMED_VMCC_FPP_{INSTANCE_ID}")\
+            (export "conductor_AFFIRMED_VMCC_FPP_{INSTANCE_ID}" self)\
+            (define conductor-instance-id {INSTANCE_ID})\
+            (define library-instance-name "AFFIRMED_VMCC_FPP")\
+            (define dvx2-log-location (get-env "DVX2_LOG_DIR") )\
+            (define dvx2-log-prefix "dvx2_")\
+            (define GDSubscription "Notification -Protocol File-Transfer\
+                -Access {access_id}")\
+            (define DeactivateAP 0)\
+            (define NI_DIR "/tmp")\'\
+             > {connect_log} 2>&1'.format(connect_log=connect_log,
+                INSTANCE_ID=INSTANCE_ID,
+                access_id=access_id)
             ]
     app_logger.info('Running {LIBRARY_NAME}.connect'\
         .format(LIBRARY_NAME=LIBRARY_NAME))
@@ -228,9 +257,11 @@ def run_connect():
 
 def delete_data():
     """
-    Delet data in target tables for datetime found in raw data files
+    Delete data in target tables for datetime found in raw data files
     """
     app_logger=logger.get_logger("delete_data")
+    pass
+
 
 def parse_dbl():
     """
@@ -262,9 +293,11 @@ def parse_dbl():
             elif "BatchEvery" in line:
                 batchevery=max(batchevery,line.split("=")[1])
             elif "WorkDir" in line:
-                work_dir_list.add(line.split("=")[1]) 
+                work_dir_list.add(os.path.expandvars(
+                    line.split('=')[1].replace('$/','/')))
             elif "ErrorDir" in line:
-                error_dir_list.add(line.split("=")[1]) 
+                error_dir_list.add(os.path.expandvars(
+                    line.split('=')[1].replace('$/','/')))
                 
     
 
@@ -275,12 +308,81 @@ def get_datetime():
     global datetime_list
     app_logger=logger.get_logger("get_datetime")
 
+def copy_rd():
+    """
+    Copy raw data files to the input folder 
+    """
+    global LOCAL_DIR
+    global MASK
+    app_logger=logger.get_logger("copy_rd")
+    target_dir=os.path.join(LOCAL_DIR,'in_sim')
+    app_logger.info('Copying rd files to {target_dir}'\
+        .format(target_dir=target_dir))
+    rd_file_list=glob.glob(os.path.join(LOCAL_DIR,MASK))
+    for file in rd_file_list:
+        shutil.copy(file,target_dir)
+
+def wait_rd():
+    """
+    Wait for raw data to be processed
+    """
+    global LOCAL_DIR
+    global MASK
+    app_logger=logger.get_logger("wait_rd")
+    target_dir=os.path.join(LOCAL_DIR,'in_sim')
+    while True:
+        rd_files=glob.glob(os.path.join(target_dir,MASK))
+        if len(rd_files) == 0:
+            break
+        app_logger.info('{rd_files} raw data files on queue'\
+            .format(rd_files=len(rd_files)))
+        time.sleep(10)
+
+def wait_bcp():
+    """
+    Wait for bcp files to be processed
+    """
+    global work_dir_list
+    global INSTANCE_ID
+    app_logger=logger.get_logger("wait_bcp")
+    while True:
+        bcp_files=[]
+        for dir in work_dir_list:
+            bcp_files.extend(glob.glob(dir+"/*{INSTANCE_ID}*"\
+                .format(INSTANCE_ID=INSTANCE_ID)))
+        if len(bcp_files) == 0:
+            break
+        app_logger.info('{bcp_files} bcp files on queue'\
+            .format(bcp_files=len(bcp_files)))
+        time.sleep(10)
+
+def wait_connect():
+    """
+    Wait for connect to come up
+    """
+    global DVX2_LOG_FILE
+    app_logger=logger.get_logger("wait_connect")
+    do_loop=True
+    while do_loop:
+        app_logger.info("Waiting for connect to come up")
+        time.sleep(10)
+        with open(DVX2_LOG_FILE) as file:
+            filedata=file.read().split('\n')
+            for line in filedata:
+                if "Fatal error" in line:
+                    app_logger.error(line)
+                    quit()
+                elif "Subcribed to" in line:
+                    do_loop=False
+                    break
 
 def main():
     app_logger=logger.get_logger("main")
     global DVX2_IMP_DIR
     global DVX2_LOG_DIR
+    global DVX2_LOG_FILE
     global connect_file
+    global access_id
     parse_args()
 
     #Validate environment variables
@@ -292,6 +394,11 @@ def main():
         app_logger.error('DVX2_LOG_DIR env variable not defined') 
         quit()
     DVX2_LOG_DIR=os.environ['DVX2_LOG_DIR']
+    DVX2_LOG_FILE=os.path.join(DVX2_LOG_DIR,\
+        "dvx2_{LIBRARY_NAME}_{INSTANCE_ID}.log"\
+        .format(LIBRARY_NAME=LIBRARY_NAME,INSTANCE_ID=INSTANCE_ID))
+    #Make log file empty
+    open(DVX2_LOG_FILE, 'w').close()
     #Validate if Library exists
     connect_file=os.path.join(DVX2_IMP_DIR,'scripts',LIBRARY_NAME+'.connect')
     if not connect_file:
@@ -316,26 +423,33 @@ def main():
 
     #Parse DBL file
     parse_dbl()
-    quit()
-
-    #Parse DBL file
-    parse_dbl()
 
     #Get datetime list
-    get_datetime()
+    #get_datetime()
 
-    quit()
     #Run connect
     worker = Thread(target=run_connect, args=())
     worker.setDaemon(True)
     worker.start()
-    while True:
-        print('Main')
-        time.sleep(5)
+    wait_connect()
 
-    
+    #Copy rd files to input folder
+    copy_rd()
+       
+    #Wait for raw data to be processed
+    wait_rd()
+
+    #Wait for bcp files to be processed
+    wait_bcp()
+
+    #Kill connect
+    app_logger.info('Stopping connect file')
+    kill_process('connect','{LIBRARY_NAME}_{INSTANCE_ID}'\
+        .format(LIBRARY_NAME=LIBRARY_NAME,
+            INSTANCE_ID=INSTANCE_ID))
+
     #Delete data from tables tables
-    delete_data()
+    #delete_data()
 
 
 if __name__ == "__main__":
@@ -365,6 +479,7 @@ if __name__ == "__main__":
     NE_NAME='Mediation_Server'
     DVX2_IMP_DIR=''
     DVX2_LOG_DIR=''
+    DVX2_LOG_FILE=''
     INSTANCE_ID="1717"
     connect_log=""
     connect_file=""
@@ -373,5 +488,6 @@ if __name__ == "__main__":
     error_dir_list=set()
     datetime_list=set()
     batchevery=30
+    access_id=""
     logger=LoggerInit(log_file,10)
     main()
