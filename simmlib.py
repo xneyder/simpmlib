@@ -20,6 +20,9 @@ import signal
 import subprocess
 import time
 import glob
+import json
+import datetime
+import pandas as pd
 from LoggerInit import LoggerInit
 from threading import Thread
 
@@ -105,29 +108,16 @@ def kill_process(program,process_name):
 def parse_args():
     """Parse input arguments"""
     app_logger=logger.get_logger("create_access")
-    global LOCAL_DIR
-    global LIBRARY_NAME
-    global MASK
+    global CONF_FILE
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i','--input_dir',
-    	help='Raw data input dir',
-    	required=True,
-    	type=str)
 
-    parser.add_argument('-l','--lib',
-    	help='Library name',
+    parser.add_argument('-c','--conf',
+    	help='Configuration Json file',
     	required=True,
-    	type=str)
-
-    parser.add_argument('-m','--mask',
-    	help='File mask for the GD access',
     	type=str)
 
     args=parser.parse_args()
-    LIBRARY_NAME=args.lib
-    LOCAL_DIR=args.input_dir
-    if args.mask:
-        MASK=args.mask
+    CONF_FILE=args.conf
     
 
 def create_access():
@@ -260,8 +250,27 @@ def delete_data():
     Delete data in target tables for datetime found in raw data files
     """
     app_logger=logger.get_logger("delete_data")
-    pass
+    app_logger.info("Deleting data from target tables")
+    for table in table_list:
+        for _datetime in datetime_list:
+            with ManagedDbConnection(DB_USER,DB_PASSWORD,ORACLE_SID,DB_HOST) as db:
+                cursor=db.cursor()
+                sqlplus_script="""
+                    delete from {table} 
+                    where 
+                    datetime = to_date('{_datetime}','YYYY-MM-DD HH24:MI:SS')
+                """.format(table=table,
+                    _datetime=_datetime
+                )
+                try:
+                    cursor.execute(sqlplus_script)
+                    db.commit()
+                except cx_Oracle.DatabaseError as e:
+                    app_logger.error(e)
+                    app_logger.error(sqlplus_script)
+                    quit()
 
+    
 
 def parse_dbl():
     """
@@ -299,14 +308,97 @@ def parse_dbl():
                 error_dir_list.add(os.path.expandvars(
                     line.split('=')[1].replace('$/','/')))
                 
-    
+def get_tag(file_name,tag):
+    """
+    resurns the line in the file that contains the tag
+    """
+    app_logger=logger.get_logger("get_tag")
+    result=""
+    with open(file_name,'r') as file:
+        filedata=file.read().split("\n")
+        for line in filedata:
+            if tag in line:
+                result=line
+                break
+    return result
 
-def get_datetime():
+def get_column(file_name,column):
+    """
+    resurns the vallues in the file for the given column
+    """
+    app_logger=logger.get_logger("get_column")
+    #clean up the file
+    data=[]
+    with open(file_name,'r') as file:
+        filedata=file.read().split('\n')
+        for line in filedata:
+            if configuration['post_tag_string'] in line:
+                continue
+            data.append(line)
+
+    tmp_file_name=file_name+".tmp"
+    with open(tmp_file_name,'w') as file:
+        for line in data:
+            file.write(line+'\n')
+
+    df=pd.read_csv(tmp_file_name,sep=configuration['delimiter'])
+    os.remove(tmp_file_name)    
+    return list(df.loc[:,column])
+
+
+def get_keys():
     """
     Get table list and batchevery time from dbl fiile
     """
     global datetime_list
-    app_logger=logger.get_logger("get_datetime")
+    global ne_list
+    app_logger=logger.get_logger("get_keys")
+    global configuration
+    NE_NAME=configuration['NE_NAME']
+    rd_file_list=glob.glob(os.path.join(LOCAL_DIR,MASK))
+    #get datetime
+    for file_name in rd_file_list:
+        function_list=[]
+        if configuration['DATETIME']['source'].lower()=="filename":
+            bfile_name=os.path.basename(file_name)
+            function_list.append(\
+                configuration['DATETIME']['function']\
+                    .replace('input',"'"+bfile_name+"'")
+            )
+
+        elif configuration['DATETIME']['source'].lower()=="tag":
+            line=get_tag(file_name,configuration['DATETIME']['tag'])
+            function_list.append(
+                configuration['DATETIME']['function']\
+                    .replace('input',"'"+line+"'")
+            )
+
+        elif configuration['DATETIME']['source'].lower()=="column":
+            tmp_list=get_column(file_name,
+                configuration['DATETIME']['column'])            
+            function_list=[]
+            for line in tmp_list:
+                function_list.append(configuration['DATETIME']['function']\
+                    .replace('input',"'"+str(line)+"'")) 
+        else:
+            app_logger.error('Wrong DATETIME configuration {DATETIME}'\
+                .format(DATETIME=DATETIME)) 
+            quit()
+                
+        if not function_list:
+            app_logger.error('DATETIME not found in file {file_name} \
+                configuration {conf}'.format(conf=configuration['DATETIME'],
+                file_name=file_name))
+            quit()
+
+        for function in function_list:
+            try:
+                datetime_str=eval(function)
+            except Exception as e:
+                app_logger.error(e)
+                quit()
+            datetime_list.add(datetime.datetime.strptime(datetime_str,
+                configuration['DATETIME']['format']))
 
 def copy_rd():
     """
@@ -337,6 +429,7 @@ def wait_rd():
         app_logger.info('{rd_files} raw data files on queue'\
             .format(rd_files=len(rd_files)))
         time.sleep(10)
+    time.sleep(30)
 
 def wait_bcp():
     """
@@ -383,7 +476,22 @@ def main():
     global DVX2_LOG_FILE
     global connect_file
     global access_id
+    global LIBRARY_NAME
+    global MASK
+    global LOCAL_DIR
+    global configuration
     parse_args()
+
+    try:
+        with open(CONF_FILE) as json_file:
+            configuration=json.load(json_file)
+    except IOError as e:
+        app_logger_local.error(e)
+        quit()
+
+    LIBRARY_NAME=configuration['library']
+    MASK=configuration['mask']
+    LOCAL_DIR=configuration['input_rd_path']
 
     #Validate environment variables
     if 'DVX2_IMP_DIR' not in os.environ:
@@ -415,6 +523,7 @@ def main():
             .format(LOCAL_DIR=LOCAL_DIR)) 
         quit()
 
+
     #Create GD Access
     access_id=create_access()
     if not access_id:
@@ -424,8 +533,11 @@ def main():
     #Parse DBL file
     parse_dbl()
 
-    #Get datetime list
-    #get_datetime()
+    #Get all keys in the raw data
+    get_keys()
+
+    #Delete the dat ain the tables
+    delete_data()
 
     #Run connect
     worker = Thread(target=run_connect, args=())
@@ -453,7 +565,6 @@ def main():
 
 
 if __name__ == "__main__":
-    print os.getcwd()
     #constants
     TMP_DIR=os.path.join(os.getcwd(),'tmp')
     if not os.path.exists(TMP_DIR):
@@ -481,12 +592,15 @@ if __name__ == "__main__":
     DVX2_LOG_DIR=''
     DVX2_LOG_FILE=''
     INSTANCE_ID="1717"
+    CONF_FILE=""
+    configuration={}
     connect_log=""
     connect_file=""
     table_list=set()
     work_dir_list=set()
     error_dir_list=set()
     datetime_list=set()
+    ne_list=set()
     batchevery=30
     access_id=""
     logger=LoggerInit(log_file,10)

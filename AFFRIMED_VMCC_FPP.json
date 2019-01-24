@@ -1,0 +1,24 @@
+{
+    "library": "AFFIRMED_VMCC_FPP",
+    "input_rd_path": "/teoco/sa_root_med01/integration/scripts/implementation/simpmlib/rd",
+    "mask": "*csv",
+    "format": "csv",
+    "delimiter": ",",
+    "post_tag_string": "POST",
+    "OM_GROUP": {
+        "source": "tag",
+        "tag": "POST OM_GROUP",
+        "function": "input.split(': ')[1]"
+    },
+    "DATETIME": {
+        "source": "column",
+        "column": "#timeofcollection",
+        "function": "datetime.datetime.utcfromtimestamp(int(input)/1000).strftime('%Y-%m-%d %H:%M:%S')",
+        "format": "%Y-%m-%d %H:%M:%S"
+    },
+    "NE_NAME": {
+        "source": "column",
+        "column": "resourceid",
+        "function": ""
+    }
+}
